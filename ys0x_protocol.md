@@ -3,7 +3,7 @@
 ## 设备连接信息
 
 **设备识别**
-- 设备名称：`YS-03` 或 `YS-04`
+- 设备名称：`YS03` 或 `YS04`
 - 服务 UUID：`00009000-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 - 写入特征：`00009001-xxxx` (WRITE NO RESPONSE)
 - 通知特征：`00009002-xxxx` (NOTIFY)
