@@ -70,21 +70,14 @@
         let keyA = null; // 设备加密密钥
         let tokenB = null; // 开锁令牌
 
-        // YS-0x 设备配置
+        // YS-0x 设备配置（Walkiz 厂商）
         const prefix = 'YS'; // 扫描前缀 (YS03, YS04)
-        const serviceUUIDPrefix = '00009000'; // 服务 UUID 前缀（支持动态匹配）
-        const writeUUIDPrefix = '00009001'; // 写入特征 UUID 前缀
-        const notifyUUIDPrefix = '00009002'; // 通知特征 UUID 前缀
+        const serviceUUID = '00009000-0000-1000-8000-57616c6b697a'; // 服务 UUID
+        const writeUUID = '00009001-0000-1000-8000-57616c6b697a'; // 写入特征 UUID
+        const notifyUUID = '00009002-0000-1000-8000-57616c6b697a'; // 通知特征 UUID
         
         // 用于存储接收到的数据
         let receivedData = null;
-        
-        // 辅助函数：检查UUID是否匹配前缀
-        function uuidStartsWith(uuid, prefix) {
-            const normalizedUUID = uuid.toLowerCase().replace(/-/g, '');
-            const normalizedPrefix = prefix.toLowerCase();
-            return normalizedUUID.startsWith(normalizedPrefix);
-        }
 
         async function scanBT() {
             if (typeof navigator.bluetooth === 'undefined') {
@@ -120,7 +113,7 @@
             try {
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: prefix }],
-                    optionalServices: ['00009000-0000-1000-8000-00805f9b34fb'] // 保留标准UUID作为兜底
+                    optionalServices: [serviceUUID]
                 });
                 
                 device.addEventListener('gattserverdisconnected', onDisconnected);
@@ -130,44 +123,16 @@
                 addLogs('连接 GATT 服务器...');
                 server = await device.gatt.connect();
                 
-                addLogs('获取所有服务...');
-                const services = await server.getPrimaryServices();
-                addLogs(`发现 ${services.length} 个服务`);
-                
-                // 查找匹配前缀的主服务
-                let targetService = null;
-                for (const service of services) {
-                    addLogs(`检查服务: ${service.uuid}`);
-                    if (uuidStartsWith(service.uuid, serviceUUIDPrefix)) {
-                        targetService = service;
-                        addLogs(`✓ 找到目标服务: ${service.uuid}`);
-                        break;
-                    }
-                }
-                
-                if (!targetService) {
-                    throw new Error('未找到匹配的服务 (00009000-xxxx-...)');
-                }
+                addLogs('获取服务...');
+                const service = await server.getPrimaryService(serviceUUID);
+                addLogs('✓ 服务连接成功: ' + serviceUUID);
                 
                 addLogs('获取特征...');
-                const characteristics = await targetService.getCharacteristics();
-                addLogs(`发现 ${characteristics.length} 个特征`);
+                writeCharacteristic = await service.getCharacteristic(writeUUID);
+                addLogs('✓ 找到写入特征');
                 
-                // 查找写入和通知特征
-                for (const char of characteristics) {
-                    addLogs(`检查特征: ${char.uuid}`);
-                    if (uuidStartsWith(char.uuid, writeUUIDPrefix)) {
-                        writeCharacteristic = char;
-                        addLogs(`✓ 找到写入特征: ${char.uuid}`);
-                    } else if (uuidStartsWith(char.uuid, notifyUUIDPrefix)) {
-                        notifyCharacteristic = char;
-                        addLogs(`✓ 找到通知特征: ${char.uuid}`);
-                    }
-                }
-                
-                if (!writeCharacteristic || !notifyCharacteristic) {
-                    throw new Error('未找到必需的特征');
-                }
+                notifyCharacteristic = await service.getCharacteristic(notifyUUID);
+                addLogs('✓ 找到通知特征');
                 
                 // 监听通知
                 await notifyCharacteristic.startNotifications();
