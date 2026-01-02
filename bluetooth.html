@@ -23,14 +23,6 @@
     <!--loading-->
     <div class="overlay" id="overlay">
         <div class="loader" id="loader"></div>
-        <div class="contain-item fixed-center visible-hidden " id="scanBT">
-            <h3>选择要连接的设备版本</h3>
-            <button onclick="scanBT(1)"
-                style="height: 40px;background-color: #ffe99d;width: 200px;border-radius: 10px;">扫描2.0设备</button>
-            <button onclick="scanBT(2)"
-                style="height: 40px;background-color: #ffe99d;width: 200px;border-radius: 10px;">扫描3.0设备</button>
-            <button onclick="toggleShowScanBT()" class="close-btn">X</button>
-        </div>
     </div>
     <!--about-us-->
     <div class="container about-container normal-text-padding" style="color:#ffe99d">
@@ -38,7 +30,7 @@
             <h2>郊狼蓝牙连接测试</h2>
         </div>
         <div class="contain-item">
-            <button onclick="toggleShowScanBT()" id="scanBTBtn" class="common-btn">扫描郊狼设备</button>
+            <button onclick="scanBT()" id="scanBTBtn" class="common-btn">扫描郊狼设备</button>
             <button onclick="disconnect()" id="disconnectBtn" class="common-btn red-btn display-none">断开设备链接</button>
         </div>
         <div class="contain-item" id="waveSelectAndPlay" onchange="changeWave()">
@@ -67,73 +59,14 @@
     <script>
         let server; // 声明一个全局变量来存储 GATT 服务器对象
         let count = 0; // AB通道发送计数器
-        let golbaltype = 1; // 选择的蓝牙设备类型 1-2.0 2-3.0
         let errorCount = 0; // 发送失败计数器
         let selectedOption = 'a';
 
-        const prefixArr = ['D-LAB', '47'] // 扫描前缀
-        const serviceIdArr = [
-            ['955a180b-0fe2-f5aa-a094-84b8d4f3e8ad'],
-            ['0000180c-0000-1000-8000-00805f9b34fb']
-        ] // 服务id
-        const dg2ChannelId = ['955a1506-0fe2-f5aa-a094-84b8d4f3e8ad', '955a1505-0fe2-f5aa-a094-84b8d4f3e8ad'] // 2.0的AB通道具体特性
-        const coyote2wave = {
-            'a': [
-                '210100',
-                '210102',
-                '210104',
-                '210106',
-                '210108',
-                '21010A',
-                '21010A',
-                '21010A',
-                '000000',
-                '000000',
-                '000000',
-                '000000'
-            ], 'b': [
-                'C4080A',
-                '24080A',
-                '84070A',
-                '03070A',
-                '63060A',
-                'E3050A',
-                '43050A',
-                'A3040A',
-                '22040A',
-                '82030A',
-                '02030A',
-                '21010A',
-                '21010A',
-                '21010A',
-                '21010A',
-                '21010A',
-                '21010A',
-                '21010A',
-                '21010A'
-            ], 'c': [
-                '210100',
-                '618102',
-                'A10105',
-                'E18107',
-                '21020A',
-                '81020A',
-                'C1020A',
-                '010300',
-                '410300',
-                'A10300',
-                '210100',
-                '618102',
-                'A10105',
-                'E18107',
-                '21020A',
-                '81020A',
-                'C1020A',
-                '010300',
-                '410300',
-                'A10300'
-            ]
-        }
+        // 郊狼3.0设备配置
+        const prefix = '47'; // 扫描前缀
+        const serviceId = '0000180c-0000-1000-8000-00805f9b34fb'; // 服务id
+        const characteristicId = '0000150a-0000-1000-8000-00805f9b34fb'; // 3.0设备蓝牙特性的波形写入 UUID (AB通道相同)
+        
         const coyote3wave = {
             'a': ['0A0A0A0A00000000',
                 '0A0A0A0A14141414',
@@ -186,7 +119,7 @@
                 '3636363646464646']
         }
 
-        function scanBT(type) {
+        function scanBT() {
             if (typeof navigator.bluetooth === 'undefined') {
                 showErrorToast('您的浏览器不支持蓝牙API，请更换为Chrome浏览器')
                 return
@@ -195,22 +128,17 @@
                 showErrorToast('请先断开当前设备，等待几秒确定断开后重新扫描，也可刷新页面。')
                 return
             }
-            golbaltype = type
-            // 选择扫描的设备前缀和服务id
-            let prefix = prefixArr[golbaltype - 1]
-            let serviceId = serviceIdArr[golbaltype - 1]
             addLogs('Scanning for Bluetooth Device...');
             showSuccessToast('扫描中，点击扫描到的设备，确定开始连接');
             showOverlay();
             showLoader();
-            hideScanBT(); //隐藏选择界面
 
             //开始扫描设备
             navigator.bluetooth.requestDevice({
                 filters: [{
                     namePrefix: prefix
                 }],
-                optionalServices: serviceId
+                optionalServices: [serviceId]
             })
                 .then(device => {
                     device.addEventListener('gattserverdisconnected', onDisconnected);//监听设备断开连接
@@ -313,68 +241,29 @@
                 showErrorToast('设备未连接，若已连接请重连')
                 return;
             }
-            // 计划写入的数据  默认写入的是2.0设备支持的波形数据
-            let currentIndex = count % coyote2wave[selectedOption].length;
-            let valueA = coyote2wave[selectedOption][currentIndex];
-            let valueB = coyote2wave[selectedOption][currentIndex];
-            let serviceId = serviceIdArr[golbaltype - 1]
-            let characteristicIdA = '955a1506-0fe2-f5aa-a094-84b8d4f3e8ad' // 2.0设备蓝牙特性的波形写入 UUID A通道
-            let characteristicIdB = '955a1505-0fe2-f5aa-a094-84b8d4f3e8ad' //b通道
-            if (golbaltype === 2) {
-                // 切换计划写入的数据  为3.0设备支持的波形数据
-                currentIndex = count % coyote3wave[selectedOption].length
-                valueA = 'B0000000' + coyote3wave[selectedOption][currentIndex] + coyote3wave[selectedOption][currentIndex]
-                characteristicIdA = '0000150a-0000-1000-8000-00805f9b34fb' // 3.0设备蓝牙特性的波形写入 UUID (AB通道相同)
+            // 写入3.0设备波形数据
+            let currentIndex = count % coyote3wave[selectedOption].length;
+            let value = 'B0000000' + coyote3wave[selectedOption][currentIndex] + coyote3wave[selectedOption][currentIndex];
 
-                server.getPrimaryService(serviceId)
-                    .then(service => {
-                        // 获取特性A
-                        return service.getCharacteristic(characteristicIdA);
-                    })
-                    .then(characteristicA => {
-                        // 写入A通道
-                        characteristicA.writeValue(hexStringToUint8Array(valueA));
-                    }).then(() => {
-                        count++;
-                        if (count % 100 === 0) {
-                            addLogs('写入成功，写入次数' + count);
-                        }
-                    })
-                    .catch(error => {
-                        errorCount++;
-                        addLogs('波形写入异常：' + error)
-                        showErrorToast('波形写入异常：' + error);
-                    });
-            }
-            else {
-                server.getPrimaryService(serviceId)
-                    .then(service => {
-                        // 获取特性A
-                        return service.getCharacteristic(characteristicIdA);
-                    })
-                    .then(characteristicA => {
-                        // 写入值A
-                        characteristicA.writeValue(hexStringToUint8Array(valueA))
-                        // 2.0需要获取B通道特性
-                        return server.getPrimaryService(serviceId)
-                            .then(service => service.getCharacteristic(characteristicIdB));
-
-                    })
-                    .then(characteristicB => {
-                        // 写入值B
-                        characteristicB.writeValue(hexStringToUint8Array(valueB))
-                        // 写入计数器
-                        count++;
-                        if (count % 100 === 0) {
-                            addLogs('写入成功，写入次数' + count)
-                        }
-                    })
-                    .catch(error => {
-                        errorCount++;
-                        addLogs('写入异常：' + error)
-                        showErrorToast('写入异常：' + error);
-                    });
-            }
+            server.getPrimaryService(serviceId)
+                .then(service => {
+                    // 获取特性
+                    return service.getCharacteristic(characteristicId);
+                })
+                .then(characteristic => {
+                    // 写入波形数据
+                    characteristic.writeValue(hexStringToUint8Array(value));
+                }).then(() => {
+                    count++;
+                    if (count % 100 === 0) {
+                        addLogs('写入成功，写入次数' + count);
+                    }
+                })
+                .catch(error => {
+                    errorCount++;
+                    addLogs('波形写入异常：' + error)
+                    showErrorToast('波形写入异常：' + error);
+                });
         }
 
         function showSuccessToast(message) {
@@ -394,7 +283,6 @@
         function hideOverlay() {
             document.getElementById("overlay").style.display = "none";
             hiddenLoader();
-            hideScanBT();
         }
 
         function showLoader() {
@@ -405,25 +293,6 @@
 
         function hiddenLoader() {
             document.getElementById("loader").style.display = "none";
-        }
-
-        function showScanBT() {
-            document.getElementById("scanBT").style.visibility = "visible";
-        }
-
-        function hideScanBT() {
-            document.getElementById("scanBT").style.visibility = "hidden";
-        }
-
-        function toggleShowScanBT() {
-            if (document.getElementById("overlay").style.display == "block") {
-                hideOverlay();
-                hiddenLoader();
-                hideScanBT();
-            } else {
-                showOverlay();
-                showScanBT();
-            }
         }
 
         function hideBtn(id) {
