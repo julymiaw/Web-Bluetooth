@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <title>YS-0x 钥匙盒蓝牙测试</title>
+    <title>钥匙盒蓝牙连接测试</title>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport"
@@ -24,11 +24,19 @@
     <!--loading-->
     <div class="overlay" id="overlay">
         <div class="loader" id="loader"></div>
+        <div class="contain-item fixed-center visible-hidden " id="scanBT">
+            <h3>选择要连接的设备版本</h3>
+            <button onclick="selectDeviceType(1)"
+                style="height: 40px;background-color: #ffe99d;width: 200px;border-radius: 10px;">YS-0x设备</button>
+            <button onclick="selectDeviceType(2)"
+                style="height: 40px;background-color: #ffe99d;width: 200px;border-radius: 10px;">OKGSS101设备</button>
+            <button onclick="toggleShowScanBT()" class="close-btn">X</button>
+        </div>
     </div>
     <!--about-us-->
     <div class="container about-container normal-text-padding" style="color:#ffe99d">
         <div class="contain-item">
-            <h2>YS-0x 钥匙盒蓝牙测试</h2>
+            <h2>钥匙盒蓝牙连接测试</h2>
         </div>
         <div class="contain-item">
             <label>KeyA (32位16进制):</label>
@@ -57,7 +65,7 @@
         <div class="logs" id="logs">
         </div>
         <div class="contain-item">
-            <span>提示：请在扫描前输入设备的 KeyA 和 TokenB。KeyA 是16字节的加密密钥，TokenB 是6字节的开锁令牌。每台设备的这些参数都不同，需要从设备管理员处获取。所有通信都使用 AES-128-ECB 加密。</span>
+            <span>提示：每次断开后重新连接新设备的间隔最好在10秒钟以上，网页和系统之间的服务通信没有正确断开可能导致NetworkError。请在扫描前输入正确的 KeyA 和 TokenB，不同设备型号的协议略有不同。</span>
         </div>
     </div>
     <!--footer-->
@@ -69,24 +77,72 @@
         let tokenA = null; // 临时会话令牌
         let keyA = null; // 设备加密密钥
         let tokenB = null; // 开锁令牌
+        let golbaltype = null; // 选择的设备类型 1-YS-0x 2-OKGSS101
+        let receivedData = null; // 用于存储接收到的数据
 
-        // YS-0x 设备配置（Walkiz 厂商）
-        const prefix = 'YS'; // 扫描前缀 (YS03, YS04)
-        const serviceUUID = '00009000-0000-1000-8000-57616c6b697a'; // 服务 UUID
-        const writeUUID = '00009001-0000-1000-8000-57616c6b697a'; // 写入特征 UUID
-        const notifyUUID = '00009002-0000-1000-8000-57616c6b697a'; // 通知特征 UUID
-        
-        // 用于存储接收到的数据
-        let receivedData = null;
+        // 设备配置数组
+        const prefixArr = ['YS', 'OKGSS']; // 扫描前缀
+        const serviceIdArr = [
+            ['00009000-0000-1000-8000-57616c6b697a'], // YS-0x 服务UUID
+            ['0000fee7-0000-1000-8000-00805f9b34fb']  // OKGSS101 服务UUID
+        ];
+        const writeIdArr = [
+            '00009001-0000-1000-8000-57616c6b697a', // YS-0x 写入UUID
+            '000036f5-0000-1000-8000-00805f9b34fb'  // OKGSS101 写入UUID
+        ];
+        const notifyIdArr = [
+            '00009002-0000-1000-8000-57616c6b697a', // YS-0x 通知UUID
+            '000036f6-0000-1000-8000-00805f9b34fb'  // OKGSS101 通知UUID
+        ];
+        // 设备默认密钥配置
+        const defaultKeys = [
+            {
+                keyA: '4B6579415F666F72546573745F757365',  // YS-0x 默认KeyA
+                tokenB: '546F6B656E42'                      // YS-0x 默认TokenB
+            },
+            {
+                keyA: '3822D7382F8B7987F31263D0E8199EC9',  // OKGSS101 默认KeyA
+                tokenB: '068FB0CDF158'                      // OKGSS101 默认TokenB
+            }
+        ];
 
-        async function scanBT() {
+        // 选择设备类型并填充密钥
+        function selectDeviceType(type) {
+            golbaltype = type;
+            
+            // 自动填充对应版本的默认密钥
+            document.getElementById('keyAInput').value = defaultKeys[golbaltype - 1].keyA;
+            document.getElementById('tokenBInput').value = defaultKeys[golbaltype - 1].tokenB;
+            
+            const deviceName = type === 1 ? 'YS-0x' : 'OKGSS101';
+            addLogs('已选择设备类型: ' + deviceName);
+            addLogs('已自动填充默认密钥，可手动修改');
+            showSuccessToast('已选择 ' + deviceName + ' 设备');
+            
+            // 关闭选择窗口
+            hideOverlay();
+        }
+
+        async function scanBT(type) {
             if (typeof navigator.bluetooth === 'undefined') {
-                showErrorToast('您的浏览器不支持蓝牙API，请更换为Chrome浏览器')
-                return
+                showErrorToast('您的浏览器不支持蓝牙API，请更换为Chrome浏览器');
+                return;
             }
             if (server) {
-                showErrorToast('请先断开当前设备')
-                return
+                showErrorToast('请先断开当前设备');
+                return;
+            }
+            
+            // 如果传入了 type 参数，更新设备类型
+            if (type) {
+                golbaltype = type;
+            }
+            
+            // 检查是否已选择设备类型
+            if (!golbaltype) {
+                showErrorToast('请先选择设备类型');
+                toggleShowScanBT();
+                return;
             }
             
             // 获取并验证 KeyA 和 TokenB
@@ -105,15 +161,20 @@
             keyA = hexStringToUint8Array(keyAInput);
             tokenB = hexStringToUint8Array(tokenBInput);
             
-            addLogs('开始扫描钥匙盒设备...');
-            showSuccessToast('扫描中，请选择设备');
+            // 选择扫描的设备前缀和服务id
+            let prefix = prefixArr[golbaltype - 1];
+            let serviceId = serviceIdArr[golbaltype - 1];
+            
+            addLogs('Scanning for Bluetooth Device...');
+            showSuccessToast('扫描中，点击扫描到的设备，确定开始连接');
             showOverlay();
             showLoader();
+            hideScanBT(); // 隐藏选择界面
 
             try {
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: prefix }],
-                    optionalServices: [serviceUUID]
+                    optionalServices: serviceId
                 });
                 
                 device.addEventListener('gattserverdisconnected', onDisconnected);
@@ -124,14 +185,14 @@
                 server = await device.gatt.connect();
                 
                 addLogs('获取服务...');
-                const service = await server.getPrimaryService(serviceUUID);
-                addLogs('✓ 服务连接成功: ' + serviceUUID);
+                const service = await server.getPrimaryService(serviceId[0]);
+                addLogs('✓ 服务连接成功');
                 
                 addLogs('获取特征...');
-                writeCharacteristic = await service.getCharacteristic(writeUUID);
+                writeCharacteristic = await service.getCharacteristic(writeIdArr[golbaltype - 1]);
                 addLogs('✓ 找到写入特征');
                 
-                notifyCharacteristic = await service.getCharacteristic(notifyUUID);
+                notifyCharacteristic = await service.getCharacteristic(notifyIdArr[golbaltype - 1]);
                 addLogs('✓ 找到通知特征');
                 
                 // 监听通知
@@ -257,11 +318,22 @@
         async function performHandshake() {
             addLogs('开始握手...');
             const message = new Uint8Array(16);
-            message[0] = 0x01;
-            message[1] = 0x00;
-            // 剩余14字节随机填充
-            const padding = generateRandomPadding(14);
-            message.set(padding, 2);
+            
+            if (golbaltype === 1) {
+                // YS-0x 协议
+                message[0] = 0x01;
+                message[1] = 0x00;
+                // 剩余14字节随机填充
+                const padding = generateRandomPadding(14);
+                message.set(padding, 2);
+            } else {
+                // OKGSS101 协议
+                message[0] = 0x06;
+                message[1] = 0x01;
+                message[2] = 0x01;
+                message[3] = 0x01;
+                // 剩余12字节保持为0
+            }
             
             receivedData = null;
             await sendEncryptedMessage(message);
@@ -269,8 +341,12 @@
             // 等待响应
             await waitForResponse(2000);
             
-            if (receivedData && receivedData[0] === 0x81 && receivedData[1] === 0x00) {
+            if (golbaltype === 1 && receivedData && receivedData[0] === 0x81 && receivedData[1] === 0x00) {
                 tokenA = receivedData.slice(2, 6);
+                addLogs('握手成功，TokenA: ' + uint8ArrayToHex(tokenA));
+                showSuccessToast('握手成功');
+            } else if (golbaltype === 2 && receivedData && receivedData[0] === 0x06 && receivedData[1] === 0x02) {
+                tokenA = receivedData.slice(3, 7);
                 addLogs('握手成功，TokenA: ' + uint8ArrayToHex(tokenA));
                 showSuccessToast('握手成功');
             } else {
@@ -288,20 +364,39 @@
             
             addLogs('查询电量...');
             const message = new Uint8Array(16);
-            message[0] = 0x10;
-            message[1] = 0x02;
-            // 8字节占位（0x00）
-            // TokenA 放在最后4字节
-            message.set(tokenA, 12);
+            
+            if (golbaltype === 1) {
+                // YS-0x 协议
+                message[0] = 0x10;
+                message[1] = 0x02;
+                // 8字节占位（0x00）
+                // TokenA 放在最后4字节
+                message.set(tokenA, 12);
+            } else {
+                // OKGSS101 协议
+                message[0] = 0x02;
+                message[1] = 0x01;
+                message[2] = 0x01;
+                message[3] = 0x01;
+                // TokenA 放在第4-7字节
+                message.set(tokenA, 4);
+                // 剩余字节保持为0
+            }
             
             receivedData = null;
             await sendEncryptedMessage(message);
             
             // 等待响应
-            await waitForResponse(2000);
+            await waitForResponse(golbaltype === 1 ? 2000 : 3000);
             
-            if (receivedData && receivedData[0] === 0x90 && receivedData[1] === 0x02) {
+            if (golbaltype === 1 && receivedData && receivedData[0] === 0x90 && receivedData[1] === 0x02) {
                 const battery = receivedData[2];
+                const batteryPercent = Math.min(battery, 100);
+                document.getElementById('batteryLevel').textContent = batteryPercent;
+                addLogs('电量: ' + batteryPercent + '%');
+                showSuccessToast('电量: ' + batteryPercent + '%');
+            } else if (golbaltype === 2 && receivedData && receivedData[0] === 0x02 && receivedData[1] === 0x02) {
+                const battery = receivedData[3];  // OKGSS101 电量值在索引3
                 const batteryPercent = Math.min(battery, 100);
                 document.getElementById('batteryLevel').textContent = batteryPercent;
                 addLogs('电量: ' + batteryPercent + '%');
@@ -321,14 +416,28 @@
             
             addLogs('发送开锁指令...');
             const message = new Uint8Array(16);
-            message[0] = 0x20;
-            message[1] = 0x01;
-            // TokenB (6字节)
-            message.set(tokenB, 2);
-            // 4字节占位 (0xFF)
-            message.set([0xFF, 0xFF, 0xFF, 0xFF], 8);
-            // TokenA 放在最后4字节
-            message.set(tokenA, 12);
+            
+            if (golbaltype === 1) {
+                // YS-0x 协议
+                message[0] = 0x20;
+                message[1] = 0x01;
+                // TokenB (6字节)
+                message.set(tokenB, 2);
+                // 4字节占位 (0xFF)
+                message.set([0xFF, 0xFF, 0xFF, 0xFF], 8);
+                // TokenA 放在最后4字节
+                message.set(tokenA, 12);
+            } else {
+                // OKGSS101 协议
+                message[0] = 0x05;
+                message[1] = 0x01;
+                message[2] = 0x06;
+                // TokenB (6字节)
+                message.set(tokenB, 3);
+                // TokenA 放在第9-12字节
+                message.set(tokenA, 9);
+                // 剩余字节保持为0
+            }
             
             receivedData = null;
             await sendEncryptedMessage(message);
@@ -336,7 +445,16 @@
             // 等待响应
             await waitForResponse(2000);
             
-            if (receivedData && receivedData[0] === 0xA0 && receivedData[1] === 0x01) {
+            if (golbaltype === 1 && receivedData && receivedData[0] === 0xA0 && receivedData[1] === 0x01) {
+                const status = receivedData[2];
+                if (status === 0x00) {
+                    addLogs('开锁成功！');
+                    showSuccessToast('开锁成功！');
+                } else {
+                    addLogs('开锁失败，状态码: ' + status);
+                    showErrorToast('开锁失败');
+                }
+            } else if (golbaltype === 2 && receivedData && receivedData[0] === 0x05) {
                 const status = receivedData[2];
                 if (status === 0x00) {
                     addLogs('开锁成功！');
@@ -394,6 +512,7 @@
         function hideOverlay() {
             document.getElementById("overlay").style.display = "none";
             hiddenLoader();
+            hideScanBT();
         }
 
         function showLoader() {
@@ -404,6 +523,24 @@
 
         function hiddenLoader() {
             document.getElementById("loader").style.display = "none";
+        }
+
+        function showScanBT() {
+            document.getElementById("scanBT").style.visibility = "visible";
+        }
+
+        function hideScanBT() {
+            document.getElementById("scanBT").style.visibility = "hidden";
+        }
+
+        function toggleShowScanBT() {
+            if (document.getElementById("overlay").style.display == "block") {
+                hideOverlay();
+                hideScanBT();
+            } else {
+                showOverlay();
+                showScanBT();
+            }
         }
 
         function hideBtn(id) {
@@ -427,8 +564,9 @@
 
         window.onload = function () {
             addLogs('页面加载完成');
-            addLogs('请输入 KeyA 和 TokenB 后扫描设备');
-            showSuccessToast('请输入密钥后扫描设备');
+            addLogs('请选择设备版本开始连接');
+            // 直接弹出设备选择窗口
+            toggleShowScanBT();
         }
 
     </script>
