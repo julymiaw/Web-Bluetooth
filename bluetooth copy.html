@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>YS-0x 钥匙盒蓝牙测试</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="format-detection" content="telephone=no">
+    <meta content="initial-dpr=2,maximum-dpr=3" name="flexible" />
+    <meta name="apple-mobile-web-app-title" content="YS-0x 钥匙盒">
+    <meta name="keywords" content="YS-0x 钥匙盒" />
+    <meta name="description" content="YS-0x 钥匙盒蓝牙测试" />
+
+    <link rel="stylesheet" href="notyf.min.css">
+    <script src="crypto-js.min.js"></script>
+
+</head>
+
+<body style="background-color: #111;">
+    <!--loading-->
+    <div class="overlay" id="overlay">
+        <div class="loader" id="loader"></div>
+    </div>
+    <!--about-us-->
+    <div class="container about-container normal-text-padding" style="color:#ffe99d">
+        <div class="contain-item">
+            <h2>YS-0x 钥匙盒蓝牙测试</h2>
+        </div>
+        <div class="contain-item">
+            <label>KeyA (32位16进制):</label>
+            <input type="text" id="keyAInput" value="4B6579415F666F72546573745F757365" 
+                   style="width: 300px; padding: 8px; margin-top: 10px;" maxlength="32">
+        </div>
+        <div class="contain-item">
+            <label>TokenB (12位16进制):</label>
+            <input type="text" id="tokenBInput" value="546F6B656E42" 
+                   style="width: 300px; padding: 8px; margin-top: 10px;" maxlength="12">
+        </div>
+        <div class="contain-item">
+            <button onclick="scanBT()" id="scanBTBtn" class="common-btn">扫描钥匙盒设备</button>
+            <button onclick="disconnect()" id="disconnectBtn" class="common-btn red-btn display-none">断开设备链接</button>
+        </div>
+        <div class="contain-item" id="deviceOperations" style="display: none;">
+            <div style="margin: 10px 0;">
+                <span>设备电量: </span>
+                <span id="batteryLevel" style="font-size: 24px; font-weight: bold;">--</span>
+                <span>%</span>
+            </div>
+            <button onclick="queryBattery()" class="common-btn" id="queryBatteryBtn">查询电量</button>
+            <button onclick="openLock()" class="common-btn" id="openLockBtn" style="background-color: #4CAF50;">打开锁盒</button>
+        </div>
+        <span class="logs-title">连接日志</span>
+        <div class="logs" id="logs">
+        </div>
+        <div class="contain-item">
+            <span>提示：请在扫描前输入设备的 KeyA 和 TokenB。KeyA 是16字节的加密密钥，TokenB 是6字节的开锁令牌。每台设备的这些参数都不同，需要从设备管理员处获取。所有通信都使用 AES-128-ECB 加密。</span>
+        </div>
+    </div>
+    <!--footer-->
+    <script type="text/javascript" src="notyf.min.js"></script>
+    <script>
+        let server; // GATT 服务器对象
+        let writeCharacteristic; // 写入特征
+        let notifyCharacteristic; // 通知特征
+        let tokenA = null; // 临时会话令牌
+        let keyA = null; // 设备加密密钥
+        let tokenB = null; // 开锁令牌
+
+        // YS-0x 设备配置（Walkiz 厂商）
+        const prefix = 'YS'; // 扫描前缀 (YS03, YS04)
+        const serviceUUID = '00009000-0000-1000-8000-57616c6b697a'; // 服务 UUID
+        const writeUUID = '00009001-0000-1000-8000-57616c6b697a'; // 写入特征 UUID
+        const notifyUUID = '00009002-0000-1000-8000-57616c6b697a'; // 通知特征 UUID
+        
+        // 用于存储接收到的数据
+        let receivedData = null;
+
+        async function scanBT() {
+            if (typeof navigator.bluetooth === 'undefined') {
+                showErrorToast('您的浏览器不支持蓝牙API，请更换为Chrome浏览器')
+                return
+            }
+            if (server) {
+                showErrorToast('请先断开当前设备')
+                return
+            }
+            
+            // 获取并验证 KeyA 和 TokenB
+            const keyAInput = document.getElementById('keyAInput').value.trim();
+            const tokenBInput = document.getElementById('tokenBInput').value.trim();
+            
+            if (!keyAInput || keyAInput.length !== 32) {
+                showErrorToast('请输入正确的 KeyA (32位16进制字符)');
+                return;
+            }
+            if (!tokenBInput || tokenBInput.length !== 12) {
+                showErrorToast('请输入正确的 TokenB (12位16进制字符)');
+                return;
+            }
+            
+            keyA = hexStringToUint8Array(keyAInput);
+            tokenB = hexStringToUint8Array(tokenBInput);
+            
+            addLogs('开始扫描钥匙盒设备...');
+            showSuccessToast('扫描中，请选择设备');
+            showOverlay();
+            showLoader();
+
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: prefix }],
+                    optionalServices: [serviceUUID]
+                });
+                
+                device.addEventListener('gattserverdisconnected', onDisconnected);
+                addLogs('设备名称: ' + device.name);
+                addLogs('设备ID: ' + device.id);
+                
+                addLogs('连接 GATT 服务器...');
+                server = await device.gatt.connect();
+                
+                addLogs('获取服务...');
+                const service = await server.getPrimaryService(serviceUUID);
+                addLogs('✓ 服务连接成功: ' + serviceUUID);
+                
+                addLogs('获取特征...');
+                writeCharacteristic = await service.getCharacteristic(writeUUID);
+                addLogs('✓ 找到写入特征');
+                
+                notifyCharacteristic = await service.getCharacteristic(notifyUUID);
+                addLogs('✓ 找到通知特征');
+                
+                // 监听通知
+                await notifyCharacteristic.startNotifications();
+                notifyCharacteristic.addEventListener('characteristicvaluechanged', handleNotification);
+                
+                hideOverlay();
+                hideBtn('scanBTBtn');
+                showBtn('disconnectBtn');
+                document.getElementById('deviceOperations').style.display = 'flex';
+                
+                addLogs('设备连接成功！');
+                showSuccessToast('设备连接成功');
+                
+                // 自动执行握手
+                await performHandshake();
+                
+            } catch (error) {
+                console.error('Error: ' + error);
+                addLogs('连接失败: ' + error);
+                hideOverlay();
+                showErrorToast('连接失败: ' + error.message);
+            }
+        }
+
+        function disconnect() {
+            if (server) {
+                server.disconnect();
+                server = null;
+                writeCharacteristic = null;
+                notifyCharacteristic = null;
+                tokenA = null;
+                hideBtn('disconnectBtn');
+                showBtn('scanBTBtn');
+                document.getElementById('deviceOperations').style.display = 'none';
+                document.getElementById('batteryLevel').textContent = '--';
+                addLogs('设备已断开');
+            }
+        }
+        
+        function hexStringToUint8Array(hexString) {
+            if (hexString.length % 2 !== 0) {
+                throw new Error('Hex string length must be even');
+            }
+            const array = new Uint8Array(hexString.length / 2);
+            for (let i = 0; i < hexString.length; i += 2) {
+                array[i / 2] = parseInt(hexString.substr(i, 2), 16);
+            }
+            return array;
+        }
+        
+        function uint8ArrayToHex(array) {
+            return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+        }
+        
+        // AES-128-ECB 加密（使用 CryptoJS）
+        function aesEncrypt(data, key) {
+            // 将 Uint8Array 转换为 CryptoJS WordArray
+            const dataWords = CryptoJS.lib.WordArray.create(data);
+            const keyWords = CryptoJS.lib.WordArray.create(key);
+            
+            // 使用 AES-128-ECB 加密
+            const encrypted = CryptoJS.AES.encrypt(dataWords, keyWords, {
+                mode: CryptoJS.mode.ECB,
+                padding: CryptoJS.pad.NoPadding
+            });
+            
+            // 转换回 Uint8Array
+            const encryptedHex = encrypted.ciphertext.toString(CryptoJS.enc.Hex);
+            return hexStringToUint8Array(encryptedHex);
+        }
+        
+        // AES-128-ECB 解密（使用 CryptoJS）
+        function aesDecrypt(data, key) {
+            // 将 Uint8Array 转换为 CryptoJS WordArray
+            const dataWords = CryptoJS.lib.WordArray.create(data);
+            const keyWords = CryptoJS.lib.WordArray.create(key);
+            
+            // 创建 CipherParams 对象
+            const cipherParams = CryptoJS.lib.CipherParams.create({
+                ciphertext: dataWords
+            });
+            
+            // 使用 AES-128-ECB 解密
+            const decrypted = CryptoJS.AES.decrypt(cipherParams, keyWords, {
+                mode: CryptoJS.mode.ECB,
+                padding: CryptoJS.pad.NoPadding
+            });
+            
+            // 转换回 Uint8Array
+            const decryptedHex = decrypted.toString(CryptoJS.enc.Hex);
+            return hexStringToUint8Array(decryptedHex);
+        }
+        
+        // 生成随机填充
+        function generateRandomPadding(length) {
+            return crypto.getRandomValues(new Uint8Array(length));
+        }
+        
+        // 处理通知数据
+        function handleNotification(event) {
+            const encryptedData = new Uint8Array(event.target.value.buffer);
+            addLogs('收到加密数据: ' + uint8ArrayToHex(encryptedData));
+            
+            try {
+                const decryptedData = aesDecrypt(encryptedData, keyA);
+                addLogs('解密数据: ' + uint8ArrayToHex(decryptedData));
+                receivedData = decryptedData;
+            } catch (error) {
+                addLogs('解密失败: ' + error);
+            }
+        }
+        
+        // 发送加密消息
+        async function sendEncryptedMessage(plainData) {
+            addLogs('发送明文: ' + uint8ArrayToHex(plainData));
+            const encryptedData = aesEncrypt(plainData, keyA);
+            addLogs('发送密文: ' + uint8ArrayToHex(encryptedData));
+            await writeCharacteristic.writeValue(encryptedData);
+        }
+        
+        // 握手获取 TokenA
+        async function performHandshake() {
+            addLogs('开始握手...');
+            const message = new Uint8Array(16);
+            message[0] = 0x01;
+            message[1] = 0x00;
+            // 剩余14字节随机填充
+            const padding = generateRandomPadding(14);
+            message.set(padding, 2);
+            
+            receivedData = null;
+            await sendEncryptedMessage(message);
+            
+            // 等待响应
+            await waitForResponse(2000);
+            
+            if (receivedData && receivedData[0] === 0x81 && receivedData[1] === 0x00) {
+                tokenA = receivedData.slice(2, 6);
+                addLogs('握手成功，TokenA: ' + uint8ArrayToHex(tokenA));
+                showSuccessToast('握手成功');
+            } else {
+                addLogs('握手失败');
+                showErrorToast('握手失败');
+            }
+        }
+        
+        // 查询电量
+        async function queryBattery() {
+            if (!tokenA) {
+                showErrorToast('请先完成握手');
+                return;
+            }
+            
+            addLogs('查询电量...');
+            const message = new Uint8Array(16);
+            message[0] = 0x10;
+            message[1] = 0x02;
+            // 8字节占位（0x00）
+            // TokenA 放在最后4字节
+            message.set(tokenA, 12);
+            
+            receivedData = null;
+            await sendEncryptedMessage(message);
+            
+            // 等待响应
+            await waitForResponse(2000);
+            
+            if (receivedData && receivedData[0] === 0x90 && receivedData[1] === 0x02) {
+                const battery = receivedData[2];
+                const batteryPercent = Math.min(battery, 100);
+                document.getElementById('batteryLevel').textContent = batteryPercent;
+                addLogs('电量: ' + batteryPercent + '%');
+                showSuccessToast('电量: ' + batteryPercent + '%');
+            } else {
+                addLogs('查询电量失败');
+                showErrorToast('查询电量失败');
+            }
+        }
+        
+        // 打开锁盒
+        async function openLock() {
+            if (!tokenA) {
+                showErrorToast('请先完成握手');
+                return;
+            }
+            
+            addLogs('发送开锁指令...');
+            const message = new Uint8Array(16);
+            message[0] = 0x20;
+            message[1] = 0x01;
+            // TokenB (6字节)
+            message.set(tokenB, 2);
+            // 4字节占位 (0xFF)
+            message.set([0xFF, 0xFF, 0xFF, 0xFF], 8);
+            // TokenA 放在最后4字节
+            message.set(tokenA, 12);
+            
+            receivedData = null;
+            await sendEncryptedMessage(message);
+            
+            // 等待响应
+            await waitForResponse(2000);
+            
+            if (receivedData && receivedData[0] === 0xA0 && receivedData[1] === 0x01) {
+                const status = receivedData[2];
+                if (status === 0x00) {
+                    addLogs('开锁成功！');
+                    showSuccessToast('开锁成功！');
+                } else {
+                    addLogs('开锁失败，状态码: ' + status);
+                    showErrorToast('开锁失败');
+                }
+            } else {
+                addLogs('开锁失败，未收到响应');
+                showErrorToast('开锁失败');
+            }
+        }
+        
+        // 等待响应
+        function waitForResponse(timeout) {
+            return new Promise((resolve) => {
+                const startTime = Date.now();
+                const checkInterval = setInterval(() => {
+                    if (receivedData || Date.now() - startTime > timeout) {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+        function onDisconnected(event) {
+            const device = event.target;
+            showErrorToast(`设备: ${device.name} 已断开连接`);
+            addLogs(`设备: ${device.name} 已断开连接`);
+            server = null;
+            writeCharacteristic = null;
+            notifyCharacteristic = null;
+            tokenA = null;
+            showBtn('scanBTBtn');
+            hideBtn('disconnectBtn');
+            document.getElementById('deviceOperations').style.display = 'none';
+            document.getElementById('batteryLevel').textContent = '--';
+        }
+
+        function showSuccessToast(message) {
+            let notyf = new Notyf();
+            notyf.success(message);
+        }
+
+        function showErrorToast(message) {
+            let notyf = new Notyf();
+            notyf.error(message);
+        }
+
+        function showOverlay() {
+            document.getElementById("overlay").style.display = "block";
+        }
+
+        function hideOverlay() {
+            document.getElementById("overlay").style.display = "none";
+            hiddenLoader();
+        }
+
+        function showLoader() {
+            document.getElementById("loader").style.display = "block";
+            setTimeout(hideOverlay, 60 * 1000); //最多1分钟自动消失
+            setTimeout(hiddenLoader, 60 * 1000); //最多1分钟自动消失
+        }
+
+        function hiddenLoader() {
+            document.getElementById("loader").style.display = "none";
+        }
+
+        function hideBtn(id) {
+            document.getElementById(id).style.display = "none";
+        }
+
+        function showBtn(id) {
+            document.getElementById(id).style.display = "block";
+        }
+
+        function removeDisplayNone(id) {
+            document.getElementById(id).classList.remove('display-none');
+        }
+
+        function addLogs(log) {
+            let time = new Date().toLocaleTimeString();
+            let logs = document.getElementById('logs');
+            logs.innerHTML += time + ": " + log + '<br>';
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        window.onload = function () {
+            addLogs('页面加载完成');
+            addLogs('请输入 KeyA 和 TokenB 后扫描设备');
+            showSuccessToast('请输入密钥后扫描设备');
+        }
+
+    </script>
+    <style>
+        .overlay {
+            display: none;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 2;
+            cursor: pointer;
+        }
+
+        .loader {
+            display: none;
+            width: 50px;
+            padding: 8px;
+            aspect-ratio: 1;
+            border-radius: 50%;
+            background: #ffe99d;
+            --_m:
+                conic-gradient(#0000 10%, #000),
+                linear-gradient(#000 0 0) content-box;
+            -webkit-mask: var(--_m);
+            mask: var(--_m);
+            -webkit-mask-composite: source-out;
+            mask-composite: subtract;
+            animation: l3 1s infinite linear;
+            position: absolute;
+            top: 50%;
+            left: calc(50% - 25px);
+        }
+
+        @keyframes l3 {
+            to {
+                transform: rotate(1turn)
+            }
+        }
+
+        .contain-item {
+            display: flex;
+            justify-content: center;
+            padding: 20px 0 12px 0;
+            flex-direction: column;
+            align-items: center;
+            color: #ffe99d;
+        }
+
+        .close-btn {
+            background-color: transparent;
+            border: 1px solid #ffe99d;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            color: #ffe99d;
+            transition: 0.3s;
+        }
+
+        .close-btn:hover {
+            background-color: #ffe99d;
+            color: #000;
+        }
+
+        .contain-item>*:not(:first-child) {
+            margin-top: 20px;
+        }
+
+        .fixed-center {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .visible-hidden {
+            visibility: hidden;
+        }
+
+        .common-btn {
+            padding: 8px 50px;
+            border-radius: 5px;
+            background-color: #ffe99d;
+            color: #000;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .red-btn {
+            background-color: #fd3131;
+        }
+
+        .display-none {
+            display: none;
+            border: none;
+        }
+
+        .logs-title {
+            display: flex;
+            width: 100%;
+            justify-content: center;
+            margin-top: 26px;
+        }
+
+        .logs {
+            height: 200px;
+            overflow-y: scroll;
+            border: 1px solid #ffe99d;
+            margin: 10px 20px 0px 20px;
+        }
+
+        *::-webkit-scrollbar {
+            width: 4px;
+            /* 设置滚动条的宽度为1px */
+        }
+
+        *::-webkit-scrollbar-thumb {
+            background-color: #ffe99d;
+            /* 设置滚动条按钮的颜色为蓝色 */
+        }
+    </style>
+</body>
+
+</html>
